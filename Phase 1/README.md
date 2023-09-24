@@ -8,9 +8,10 @@ Getting started: PyTorch, Caltech101 dataset, ResNet50 and similarity measures
   - Histogram of oriented gradients (HOG) - Cosine similarity
   - ResNet50 (avgpool, layer3, fc) - unsatisfactory results for all, simply used euclidean
 
-## Requirements
+## Requirements and dependencies
 
-Install packages from requirements.txt (might not be complete)
+- Requires MongoDB server (local or otherwise)
+- Install packages from requirements.txt
 
 ## Task 1 - task_1.ipynb
 

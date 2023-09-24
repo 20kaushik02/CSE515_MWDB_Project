@@ -1,0 +1,13 @@
+numpy
+scipy
+scikit-learn
+scikit-image
+opencv-python
+matplotlib
+torch
+torchvision
+pymongo[srv]
+ipython
+notebook
+ipykernel
+python-dotenv
