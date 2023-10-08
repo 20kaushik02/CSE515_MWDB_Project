@@ -2,3 +2,4 @@ Datasets/
 Other code/
 *.zip
 *.env
+__pycache__

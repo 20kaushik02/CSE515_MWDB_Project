@@ -6,3 +6,7 @@
 
 - Requires MongoDB server (local or otherwise)
 - Install packages from requirements.txt
+
+## Environment variables
+
+- `DATASET_PATH` - path to the Caltech101 dataset
