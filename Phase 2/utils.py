@@ -4,6 +4,11 @@ import math
 import cv2
 import numpy as np
 from scipy.stats import pearsonr
+from scipy.sparse.linalg import svds
+from sklearn.decomposition import NMF
+from sklearn.decomposition import LatentDirichletAllocation
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.cluster import KMeans
 
 # Torch
 import torch
@@ -12,6 +17,7 @@ from torchvision.datasets import Caltech101
 from torchvision.models import resnet50, ResNet50_Weights
 
 # OS and env
+import json
 from os import getenv
 from dotenv import load_dotenv
 import warnings
@@ -566,3 +572,151 @@ def show_similar_images_for_label(
             f"Plots/Label_{target_label}_{feature_model}_{distance_measure.__name__}_k{k}.png"
         )
     plt.show()
+
+
+valid_dim_reduction_methods = {
+    "svd": 1,
+    "nmf": 2,
+    "lda": 3,
+    "kmeans": 4,
+}
+
+
+def extract_latent_semantics(
+    fd_collection, k, feature_model, dim_reduction_method, top_images=None
+):
+    """
+    Extract latent semantics for entire collection at once for a given feature_model and dim_reduction_method, and display the imageID-semantic weight pairs
+
+    Leave `top_images` blank to display all imageID-weight pairs
+    """
+
+    assert (
+        feature_model in valid_feature_models.values()
+    ), "feature_model should be one of " + str(list(valid_feature_models.keys()))
+    assert (
+        dim_reduction_method in valid_dim_reduction_methods.keys()
+    ), "dim_reduction_method should be one of " + str(
+        list(valid_dim_reduction_methods.keys())
+    )
+
+    all_images = list(fd_collection.find())
+    feature_vectors = np.array([img[feature_model] for img in all_images])
+    feature_labels = [img["true_label"] for img in all_images]
+    feature_ids = [img["image_id"] for img in all_images]
+
+    top_img_str = ""
+    if top_images is not None:
+        top_img_str = f" (showing only top {top_images} image-weight pairs for each latent semantic)"
+    print(
+        "Applying {} on the {} space to get {} latent semantics{}...".format(
+            dim_reduction_method, feature_model, k, top_img_str
+        )
+    )
+
+    displayed_latent_semantics = {}
+    all_latent_semantics = {}
+
+    match valid_dim_reduction_methods[dim_reduction_method]:
+        # singular value decomposition
+        # sparse version of SVD to get only k singular values
+        case 1:
+            U, S, V_T = svds(feature_vectors, k=k)
+
+            all_latent_semantics = {
+                "image-semantic": U.tolist(),
+                "semantics-core": S.tolist(),
+                "semantic-feature": V_T.tolist(),
+            }
+
+            # for each latent semantic, sort imageID-weight pairs by weights in descending order
+            displayed_latent_semantics = [
+                sorted(
+                    list(zip(feature_ids, latent_semantic)),
+                    key=lambda x: x[1],
+                    reverse=True,
+                )[:top_images]
+                for latent_semantic in U.T
+            ]
+
+        # non-negative matrix factorization
+        case 2:
+            # NNMF requires non-negative input data
+            # so shift the input by subtracting the smallest value
+            min_value = np.min(feature_vectors)
+            feature_vectors_shifted = feature_vectors - min_value
+
+            model = NMF(
+                n_components=k,
+                init="random",
+                solver="cd",
+                alpha_H=0.01,
+                alpha_W=0.01,
+                max_iter=10000,
+            )
+            model.fit(feature_vectors_shifted)
+
+            W = model.transform(feature_vectors_shifted)
+            H = model.components_
+
+            all_latent_semantics = {"image-semantic": W, "semantic-feature": H}
+
+            # for each latent semantic, sort imageID-weight pairs by weights in descending order
+            displayed_latent_semantics = [
+                sorted(
+                    list(zip(feature_ids, latent_semantic)),
+                    key=lambda x: x[1],
+                    reverse=True,
+                )[:top_images]
+                for latent_semantic in W.T
+            ]
+
+        # unsupervised LDA to extract topics (Latent Dirichlet Allocation)
+        # Note: LDA takes a bit of time
+        case 3:
+            # LDA requires non-negative input data
+            # so shift the input by subtracting the smallest value
+            min_value = np.min(feature_vectors)
+            feature_vectors_shifted = feature_vectors - min_value
+
+            model = LatentDirichletAllocation(
+                n_components=k, learning_method="online", verbose=4
+            )
+            model.fit(feature_vectors_shifted)
+
+            # K (k x fd_dim) is the factor matrix for latent semantic-feature pairs
+            K = model.components_
+            # X (4339 x k) is the other factor matrix for image ID-latent semantic pairs
+            X = model.transform(feature_vectors_shifted)
+
+            all_latent_semantics = {"image-semantic": X, "semantic-feature": K}
+
+            # for each latent semantic, sort imageID-weight pairs by weights in descending order
+            displayed_latent_semantics = [
+                sorted(
+                    list(zip(feature_ids, latent_semantic)),
+                    key=lambda x: x[1],
+                    reverse=True,
+                )[:top_images]
+                for latent_semantic in X.T
+            ]
+
+        # k-means clustering to reduce to k clusters/dimensions
+        case 4:
+            model = KMeans(n_clusters=k).fit(feature_vectors)
+            CC = model.cluster_centers_
+            U = model.transform(feature_vectors)
+
+            all_latent_semantics = {"image-semantic": U, "semantic_feature": CC}
+
+    for idx, latent_semantic in enumerate(displayed_latent_semantics):
+        print(f"Latent semantic no. {idx}")
+        for image_id, weight in latent_semantic:
+            print(f"Image_ID\t{image_id}\t-\tWeight\t{weight}")
+
+    with open(
+        f"{feature_model}-{dim_reduction_method}-{k}-semantics.json",
+        "w",
+        encoding="utf-8",
+    ) as output_file:
+        json.dump(all_latent_semantics, output_file, ensure_ascii=False)
