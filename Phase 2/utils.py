@@ -1,6 +1,7 @@
 # All imports
 # Math
 import math
+import random
 import cv2
 import numpy as np
 from scipy.stats import pearsonr
@@ -8,7 +9,8 @@ from scipy.sparse.linalg import svds
 from sklearn.decomposition import NMF
 from sklearn.decomposition import LatentDirichletAllocation
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-from sklearn.cluster import KMeans
+
+# from sklearn.cluster import KMeans
 
 # Torch
 import torch
@@ -582,6 +584,97 @@ valid_dim_reduction_methods = {
 }
 
 
+class KMeans:
+    def __init__(self, n_clusters, tol=0.001, max_iter=300, verbose=0):
+        self.n_clusters = n_clusters
+        self.max_iter = max_iter
+        self.tol = tol
+        self.cluster_centers_ = {}
+        self.verbose = verbose
+
+    def fit(self, data):
+        """Iterative fitting clusters on data of `(n_samples,n_features)` dimensions"""
+
+        # Randomly select centroid start points with uniform distribution from dataset
+        min_, max_ = np.min(data, axis=0), np.max(data, axis=0)
+        self.cluster_centers_ = {
+            i: np.random.uniform(min_, max_) for i in range(self.n_clusters)
+        }
+
+        if self.verbose > 0:
+            print("Initialized centroids")
+        for itr in range(self.max_iter):
+            print(f"Iteration {itr}")
+            self.clusters = {}
+
+            for j in range(self.n_clusters):
+                self.clusters[j] = []
+
+            for feature_set in data:
+                # TODO: Should this be modified to use different distance measures
+                # based on the feature set?
+                distances = [
+                    np.linalg.norm(feature_set - self.cluster_centers_[i])
+                    for i in range(len(self.cluster_centers_))
+                ]
+
+                # Put data point into closest cluster
+                cluster = np.argmin(distances)
+                self.clusters[cluster].append(feature_set)
+
+            prev_centroids = self.cluster_centers_
+
+            for c in self.cluster_centers_:
+                if isinstance(self.cluster_centers_[c], np.ndarray):
+                    if np.isnan(self.cluster_centers_[c]).any():
+                        # Reinitialize centroid to a random point in the dataset
+                        self.cluster_centers_[c] = np.random.uniform(min_, max_)
+                    else:
+                        # Compute the mean of non-empty cluster
+                        self.cluster_centers_[c] = np.mean(self.clusters[c], axis=0)
+                elif np.isnan(self.cluster_centers_[c]):
+                    # Reinitialize centroid to a random point in the dataset
+                    self.cluster_centers_[c] = np.random.uniform(min_, max_)
+
+            # Check if centroids have converged
+            optimized = True
+            for c in self.cluster_centers_:
+                prev_centroid = prev_centroids[c]
+                current_centroid = self.cluster_centers_[c]
+                convergence_tol = np.sum(abs(
+                    (prev_centroid - current_centroid) / prev_centroid * 100.0
+                ))
+                if convergence_tol > self.tol:
+                    optimized = False
+                    if self.verbose > 0:
+                        print(f"Iter {itr} - Not converged yet")
+                    break
+
+            if itr > 10 and optimized:
+                if self.verbose > 0:
+                    print(f"Iter {itr} - Converged")
+                break
+
+        return self
+
+    def transform(self, data):
+        """Transform data of `(n_samples,n_features)` dimensions to `(n_samples,n_clusters)` using fitted model"""
+
+        Y = np.empty((len(data), self.n_clusters))
+
+        for idx, feature_set in enumerate(data):
+            # TODO: Could this be modified to use different distance measures
+            # based on the feature set?
+            Y[idx] = np.array(
+                [
+                    np.linalg.norm(feature_set - self.cluster_centers_[i])
+                    for i in range(len(self.cluster_centers_))
+                ]
+            )
+
+        return Y
+
+
 def extract_latent_semantics(
     fd_collection, k, feature_model, dim_reduction_method, top_images=None
 ):
@@ -659,7 +752,10 @@ def extract_latent_semantics(
             W = model.transform(feature_vectors_shifted)
             H = model.components_
 
-            all_latent_semantics = {"image-semantic": W, "semantic-feature": H}
+            all_latent_semantics = {
+                "image-semantic": W.tolist(),
+                "semantic-feature": H.tolist(),
+            }
 
             # for each latent semantic, sort imageID-weight pairs by weights in descending order
             displayed_latent_semantics = [
@@ -689,7 +785,10 @@ def extract_latent_semantics(
             # X (4339 x k) is the other factor matrix for image ID-latent semantic pairs
             X = model.transform(feature_vectors_shifted)
 
-            all_latent_semantics = {"image-semantic": X, "semantic-feature": K}
+            all_latent_semantics = {
+                "image-semantic": X.tolist(),
+                "semantic-feature": K.tolist(),
+            }
 
             # for each latent semantic, sort imageID-weight pairs by weights in descending order
             displayed_latent_semantics = [
@@ -703,11 +802,24 @@ def extract_latent_semantics(
 
         # k-means clustering to reduce to k clusters/dimensions
         case 4:
-            model = KMeans(n_clusters=k).fit(feature_vectors)
+            model = KMeans(n_clusters=k, verbose=2).fit(feature_vectors)
             CC = model.cluster_centers_
-            U = model.transform(feature_vectors)
+            Y = model.transform(feature_vectors)
 
-            all_latent_semantics = {"image-semantic": U, "semantic_feature": CC}
+            all_latent_semantics = {
+                "image-semantic": Y.tolist(),
+                "semantic-feature": list(CC.values()),
+            }
+
+            # for each latent semantic, sort imageID-weight pairs by weights in descending order
+            displayed_latent_semantics = [
+                sorted(
+                    list(zip(feature_ids, latent_semantic)),
+                    key=lambda x: x[1],
+                    reverse=False,
+                )[:top_images]
+                for latent_semantic in Y.T
+            ]
 
     for idx, latent_semantic in enumerate(displayed_latent_semantics):
         print(f"Latent semantic no. {idx}")
