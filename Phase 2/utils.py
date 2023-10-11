@@ -641,9 +641,9 @@ class KMeans:
             for c in self.cluster_centers_:
                 prev_centroid = prev_centroids[c]
                 current_centroid = self.cluster_centers_[c]
-                convergence_tol = np.sum(abs(
-                    (prev_centroid - current_centroid) / prev_centroid * 100.0
-                ))
+                convergence_tol = np.sum(
+                    abs((prev_centroid - current_centroid) / prev_centroid * 100.0)
+                )
                 if convergence_tol > self.tol:
                     optimized = False
                     if self.verbose > 0:
@@ -676,10 +676,18 @@ class KMeans:
 
 
 def extract_latent_semantics(
-    fd_collection, k, feature_model, dim_reduction_method, top_images=None
+    fd_collection,
+    k,
+    feature_model,
+    dim_reduction_method,
+    sim_matrix=None,
+    top_images=None,
+    fn_prefix="",
 ):
     """
     Extract latent semantics for entire collection at once for a given feature_model and dim_reduction_method, and display the imageID-semantic weight pairs
+
+    Use `sim_matrix` to manually give similarity matrix instead of feature space
 
     Leave `top_images` blank to display all imageID-weight pairs
     """
@@ -694,18 +702,28 @@ def extract_latent_semantics(
     )
 
     all_images = list(fd_collection.find())
-    feature_vectors = np.array([img[feature_model] for img in all_images])
-    feature_labels = [img["true_label"] for img in all_images]
     feature_ids = [img["image_id"] for img in all_images]
-
+    
     top_img_str = ""
     if top_images is not None:
         top_img_str = f" (showing only top {top_images} image-weight pairs for each latent semantic)"
-    print(
-        "Applying {} on the {} space to get {} latent semantics{}...".format(
-            dim_reduction_method, feature_model, k, top_img_str
+
+    # if similarity matrix is provided
+    if sim_matrix is not None:
+        feature_vectors = sim_matrix
+        print(
+            "Applying {} on the {} space to get {} latent semantics{}...".format(
+                dim_reduction_method, feature_model, k, top_img_str
+            )
         )
-    )
+    # else take feature space from database
+    else:
+        feature_vectors = np.array([img[feature_model] for img in all_images])
+        print(
+            "Applying {} on the given similarity matrix to get {} latent semantics{}...".format(
+                dim_reduction_method, k, top_img_str
+            )
+        )
 
     displayed_latent_semantics = {}
     all_latent_semantics = {}
@@ -827,8 +845,38 @@ def extract_latent_semantics(
             print(f"Image_ID\t{image_id}\t-\tWeight\t{weight}")
 
     with open(
-        f"{feature_model}-{dim_reduction_method}-{k}-semantics.json",
+        f"{fn_prefix}{feature_model}-{dim_reduction_method}-{k}-semantics.json",
         "w",
         encoding="utf-8",
     ) as output_file:
         json.dump(all_latent_semantics, output_file, ensure_ascii=False)
+
+
+def find_label_label_similarity(fd_collection, feature_model):
+    """
+    Calculate similarity between labels. Lower values indicate higher similarities
+    """
+    assert (
+        feature_model in valid_feature_models.values()
+    ), "feature_model should be one of " + str(list(valid_feature_models.keys()))
+
+    label_sim_matrix = []
+    label_mean_vectors = []
+
+    num_labels = 101
+
+    for label in range(num_labels):
+        # get representative vectors for the label
+        label_mean_vectors.append(
+            calculate_label_representatives(fd_collection, label, feature_model)
+        )
+
+    label_sim_matrix = np.zeros((num_labels, num_labels))
+
+    for i in range(num_labels):
+        for j in range(i + 1, num_labels):
+            # Note: lower the value, lower the distance => higher the similarity
+            label_sim_matrix[i][j] = feature_distance_matches[feature_model](
+                np.array(label_mean_vectors[i]), np.array(label_mean_vectors[j])
+            )
+    return label_sim_matrix
