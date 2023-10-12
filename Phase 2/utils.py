@@ -358,6 +358,12 @@ valid_feature_models = {
     "fc": "fc_fd",
     "resnet": "resnet_fd",
 }
+valid_latent_spaces = {
+    "ls1": "",
+    "ls2": "cp",
+    "ls3": "label_sim",
+    "ls4": "image_sim",
+}
 valid_distance_measures = {
     "euclidean": euclidean_distance_measure,
     "cosine": cosine_distance_measure,
@@ -517,7 +523,7 @@ def calculate_label_representatives(fd_collection, label, feature_model):
     """Calculate representative feature vector of a label as the mean of all feature vectors under a feature model"""
 
     label_fds = [
-        img_fds[feature_model]  # get the specific feature model's feature vector
+        np.array(img_fds[feature_model]).flatten()  # get the specific feature model's feature vector
         for img_fds in fd_collection.find(
             {"true_label": label}
         )  # repeat for all images
@@ -804,6 +810,37 @@ class KMeans:
         return Y
 
 
+def svd(matrix, k):
+    # Step 1: Compute the covariance matrix
+    cov_matrix = np.dot(matrix.T, matrix)
+
+    # Step 2: Compute the eigenvalues and eigenvectors of the covariance matrix
+    eigenvalues, eigenvectors = np.linalg.eig(cov_matrix)
+
+    # Step 3: Sort the eigenvalues and corresponding eigenvectors
+    sort_indices = eigenvalues.argsort()[::-1]
+    eigenvalues = eigenvalues[sort_indices]
+    eigenvectors = eigenvectors[:, sort_indices]
+
+    # Step 4: Compute the singular values and the left and right singular vectors
+    singular_values = np.sqrt(eigenvalues)
+    left_singular_vectors = np.dot(matrix, eigenvectors)
+    right_singular_vectors = eigenvectors
+
+    # Step 5: Normalize the singular vectors
+    for i in range(left_singular_vectors.shape[1]):
+        left_singular_vectors[:, i] /= singular_values[i]
+
+    for i in range(right_singular_vectors.shape[1]):
+        right_singular_vectors[:, i] /= singular_values[i]
+
+    # Keep only the top k singular values and their corresponding vectors
+    singular_values = singular_values[:k]
+    left_singular_vectors = left_singular_vectors[:, :k]
+    right_singular_vectors = right_singular_vectors[:, :k]
+
+    return left_singular_vectors, np.diag(singular_values), right_singular_vectors.T
+
 def extract_latent_semantics(
     fd_collection,
     k,
@@ -861,7 +898,7 @@ def extract_latent_semantics(
         # singular value decomposition
         # sparse version of SVD to get only k singular values
         case 1:
-            U, S, V_T = svds(feature_vectors, k=k)
+            U, S, V_T = svd(feature_vectors, k=k)
 
             all_latent_semantics = {
                 "image-semantic": U.tolist(),
