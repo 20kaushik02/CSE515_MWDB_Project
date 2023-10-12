@@ -517,7 +517,9 @@ def calculate_label_representatives(fd_collection, label, feature_model):
     """Calculate representative feature vector of a label as the mean of all feature vectors under a feature model"""
 
     label_fds = [
-        img_fds[feature_model]  # get the specific feature model's feature vector
+        np.array(
+            img_fds[feature_model]
+        ).flatten()  # get the specific feature model's feature vector
         for img_fds in fd_collection.find(
             {"true_label": label}
         )  # repeat for all images
@@ -563,7 +565,7 @@ def show_similar_images_for_label(
 
     for cur_img in all_images:
         cur_img_id = cur_img["image_id"]
-        cur_img_fd = np.array(cur_img[feature_model])
+        cur_img_fd = np.array(cur_img[feature_model]).flatten()
 
         cur_dist = distance_measure(
             cur_img_fd,
@@ -652,15 +654,13 @@ def show_similar_labels_for_image(
 
     label_dict = {target_image_id: target_label}
 
-    target_image_fd = np.array(target_image[feature_model])
-
     all_images = fd_collection.find({})
     for cur_img in all_images:
         cur_img_id = cur_img["image_id"]
         # skip target itself
         if cur_img_id == target_image_id:
             continue
-        cur_img_fd = np.array(cur_img[feature_model])
+        cur_img_fd = np.array(cur_img[feature_model]).flatten()
         cur_dist = distance_measure(
             cur_img_fd,
             target_image_fd,
@@ -692,11 +692,11 @@ def show_similar_labels_for_image(
             continue
         else:
             sample_image, sample_label = dataset[image_id]
-            axs[idx-1].imshow(transforms.ToPILImage()(sample_image))
-            axs[idx-1].set_title(
+            axs[idx - 1].imshow(transforms.ToPILImage()(sample_image))
+            axs[idx - 1].set_title(
                 f"Label: {label_dict[image_id]}; Distance: {min_dists[image_id]}"
             )
-        axs[idx-1].axis("off")
+        axs[idx - 1].axis("off")
 
     if save_plots:
         plt.savefig(
@@ -804,19 +804,15 @@ class KMeans:
         return Y
 
 
-def extract_latent_semantics(
+def extract_latent_semantics_from_feature_model(
     fd_collection,
     k,
     feature_model,
     dim_reduction_method,
-    sim_matrix=None,
     top_images=None,
-    fn_prefix="",
 ):
     """
     Extract latent semantics for entire collection at once for a given feature_model and dim_reduction_method, and display the imageID-semantic weight pairs
-
-    Use `sim_matrix` to manually give similarity matrix instead of feature space
 
     Leave `top_images` blank to display all imageID-weight pairs
     """
@@ -837,22 +833,14 @@ def extract_latent_semantics(
     if top_images is not None:
         top_img_str = f" (showing only top {top_images} image-weight pairs for each latent semantic)"
 
-    # if similarity matrix is provided
-    if sim_matrix is not None:
-        feature_vectors = sim_matrix
-        print(
-            "Applying {} on the given similarity matrix to get {} latent semantics{}...".format(
-                dim_reduction_method, k, top_img_str
-            )
+    feature_vectors = np.array(
+        [np.array(img[feature_model]).flatten() for img in all_images]
+    )
+    print(
+        "Applying {} on the {} space to get {} latent semantics{}...".format(
+            dim_reduction_method, feature_model, k, top_img_str
         )
-    # else take feature space from database
-    else:
-        feature_vectors = np.array([np.array(img[feature_model]).flatten() for img in all_images])
-        print(
-            "Applying {} on the {} space to get {} latent semantics{}...".format(
-                dim_reduction_method, feature_model, k, top_img_str
-            )
-        )
+    )
 
     displayed_latent_semantics = {}
     all_latent_semantics = {}
@@ -974,7 +962,177 @@ def extract_latent_semantics(
             print(f"Image_ID\t{image_id}\t-\tWeight\t{weight}")
 
     with open(
-        f"{fn_prefix}{feature_model}-{dim_reduction_method}-{k}-semantics.json",
+        f"{feature_model}-{dim_reduction_method}-{k}-semantics.json",
+        "w",
+        encoding="utf-8",
+    ) as output_file:
+        json.dump(all_latent_semantics, output_file, ensure_ascii=False)
+
+
+def extract_latent_semantics_from_sim_matrix(
+    sim_matrix,
+    feature_model,
+    sim_type,
+    k,
+    dim_reduction_method,
+    top_images=None,
+):
+    """
+    Extract latent semantics for a given similarity matrix for a given dim_reduction_method, and display the object-semantic weight pairs
+
+    Leave `top_images` blank to display all imageID-weight pairs
+    """
+
+    assert sim_type in ["image", "label"], "sim_type should be one of " + str(
+        ["image", "label"]
+    )
+    assert (
+        feature_model in valid_feature_models.values()
+    ), "feature_model should be one of " + str(list(valid_feature_models.keys()))
+    assert (
+        dim_reduction_method in valid_dim_reduction_methods.keys()
+    ), "dim_reduction_method should be one of " + str(
+        list(valid_dim_reduction_methods.keys())
+    )
+    assert len(sim_matrix) == len(sim_matrix[0]), "sim_matrix must be square matrix"
+
+    top_img_str = ""
+    if top_images is not None:
+        top_img_str = f" (showing only top {top_images} {sim_type}-weight pairs for each latent semantic)"
+
+    feature_vectors = sim_matrix
+    feature_ids = list(range(len(sim_matrix)))
+
+    print(
+        "Applying {} on the given similarity matrix to get {} latent semantics{}...".format(
+            dim_reduction_method, k, top_img_str
+        )
+    )
+
+    displayed_latent_semantics = {}
+    all_latent_semantics = {}
+
+    match valid_dim_reduction_methods[dim_reduction_method]:
+        # singular value decomposition
+        # sparse version of SVD to get only k singular values
+        case 1:
+            U, S, V_T = svds(feature_vectors, k=k)
+
+            all_latent_semantics = {
+                "image-semantic": U.tolist(),
+                "semantics-core": S.tolist(),
+                "semantic-feature": V_T.tolist(),
+            }
+
+            # for each latent semantic, sort imageID-weight pairs by weights in descending order
+            displayed_latent_semantics = [
+                sorted(
+                    list(zip(feature_ids, latent_semantic)),
+                    key=lambda x: x[1],
+                    reverse=True,
+                )[:top_images]
+                for latent_semantic in U.T
+            ]
+
+        # non-negative matrix factorization
+        case 2:
+            # NNMF requires non-negative input data
+            # so shift the input by subtracting the smallest value
+            min_value = np.min(feature_vectors)
+            feature_vectors_shifted = feature_vectors - min_value
+
+            model = NMF(
+                n_components=k,
+                init="random",
+                solver="cd",
+                alpha_H=0.01,
+                alpha_W=0.01,
+                max_iter=10000,
+            )
+            model.fit(feature_vectors_shifted)
+
+            W = model.transform(feature_vectors_shifted)
+            H = model.components_
+
+            all_latent_semantics = {
+                "image-semantic": W.tolist(),
+                "semantic-feature": H.tolist(),
+            }
+
+            # for each latent semantic, sort imageID-weight pairs by weights in descending order
+            displayed_latent_semantics = [
+                sorted(
+                    list(zip(feature_ids, latent_semantic)),
+                    key=lambda x: x[1],
+                    reverse=True,
+                )[:top_images]
+                for latent_semantic in W.T
+            ]
+
+        # unsupervised LDA to extract topics (Latent Dirichlet Allocation)
+        # Note: LDA takes a bit of time
+        case 3:
+            # LDA requires non-negative input data
+            # so shift the input by subtracting the smallest value
+            min_value = np.min(feature_vectors)
+            feature_vectors_shifted = feature_vectors - min_value
+
+            model = LatentDirichletAllocation(
+                n_components=k, learning_method="online", verbose=4
+            )
+            model.fit(feature_vectors_shifted)
+
+            # K (k x fd_dim) is the factor matrix for latent semantic-feature pairs
+            K = model.components_
+            # X (4339 x k) is the other factor matrix for image ID-latent semantic pairs
+            X = model.transform(feature_vectors_shifted)
+
+            all_latent_semantics = {
+                "image-semantic": X.tolist(),
+                "semantic-feature": K.tolist(),
+            }
+
+            # for each latent semantic, sort imageID-weight pairs by weights in descending order
+            displayed_latent_semantics = [
+                sorted(
+                    list(zip(feature_ids, latent_semantic)),
+                    key=lambda x: x[1],
+                    reverse=True,
+                )[:top_images]
+                for latent_semantic in X.T
+            ]
+
+        # k-means clustering to reduce to k clusters/dimensions
+        case 4:
+            model = KMeans(n_clusters=k, verbose=2).fit(feature_vectors)
+            CC = model.cluster_centers_
+            Y = model.transform(feature_vectors)
+
+            all_latent_semantics = {
+                "image-semantic": Y.tolist(),
+                "semantic-feature": list(CC.values()),
+            }
+
+            # for each latent semantic, sort imageID-weight pairs by weights in descending order
+            displayed_latent_semantics = [
+                sorted(
+                    list(zip(feature_ids, latent_semantic)),
+                    key=lambda x: x[1],
+                    reverse=False,
+                )[:top_images]
+                for latent_semantic in Y.T
+            ]
+
+    for idx, latent_semantic in enumerate(displayed_latent_semantics):
+        print(f"Latent semantic no. {idx}")
+        for obj_id, weight in latent_semantic:
+            print(f"{sim_type}\t{obj_id}\t-\tWeight\t{weight}")
+
+    # Finally also save sim_matrix
+    all_latent_semantics["sim-matrix"] = sim_matrix.tolist()
+
+    with open(
+        f"{sim_type}_sim-{feature_model}-{dim_reduction_method}-{k}-semantics.json",
         "w",
         encoding="utf-8",
     ) as output_file:
@@ -1002,10 +1160,38 @@ def find_label_label_similarity(fd_collection, feature_model):
 
     label_sim_matrix = np.zeros((num_labels, num_labels))
 
+    # Calculate half and fill the other
     for i in range(num_labels):
         for j in range(i + 1, num_labels):
             # Note: lower the value, lower the distance => higher the similarity
-            label_sim_matrix[i][j] = feature_distance_matches[feature_model](
-                np.array(label_mean_vectors[i]), np.array(label_mean_vectors[j])
-            )
+            label_sim_matrix[i][j] = label_sim_matrix[j][i] = feature_distance_matches[
+                feature_model
+            ](np.array(label_mean_vectors[i]), np.array(label_mean_vectors[j]))
     return label_sim_matrix
+
+
+def find_image_image_similarity(fd_collection, feature_model):
+    """
+    Calculate similarity between images. Lower values indicate higher similarities
+    """
+    assert (
+        feature_model in valid_feature_models.values()
+    ), "feature_model should be one of " + str(list(valid_feature_models.keys()))
+
+    feature_vectors = [
+        np.array(
+            img_fds[feature_model]
+        ).flatten()  # get the specific feature model's feature vector
+        for img_fds in fd_collection.find()  # repeat for all images
+    ]
+    num_images = len(feature_vectors)
+    image_sim_matrix = np.zeros((num_images, num_images))
+
+    # Calculate half and fill the other
+    for i in range(num_images):
+        for j in range(i + 1, num_images):
+            # Note: lower the value, lower the distance => higher the similarity
+            image_sim_matrix[i][j] = image_sim_matrix[j][i] = feature_distance_matches[
+                feature_model
+            ](np.array(feature_vectors[i]), np.array(feature_vectors[j]))
+    return image_sim_matrix
