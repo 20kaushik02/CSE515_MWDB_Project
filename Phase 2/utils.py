@@ -878,7 +878,7 @@ def extract_latent_semantics_from_feature_model(
         # singular value decomposition
         # sparse version of SVD to get only k singular values
         case 1:
-            U, S, V_T = svd(feature_vectors, k=k)
+            U, S, V_T = svds(feature_vectors, k=k)
 
             all_latent_semantics = {
                 "image-semantic": U.tolist(),
