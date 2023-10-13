@@ -11,3 +11,4 @@ ipython
 notebook
 ipykernel
 python-dotenv
+tensorly

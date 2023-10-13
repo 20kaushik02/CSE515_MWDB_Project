@@ -18,6 +18,8 @@ import torchvision.transforms as transforms
 from torchvision.datasets import Caltech101
 from torchvision.models import resnet50, ResNet50_Weights
 
+import tensorly as tl
+
 # OS and env
 import json
 from os import getenv
@@ -58,6 +60,8 @@ def loadDataset(dataset):
 
 
 dataset = loadDataset(Caltech101)
+NUM_LABELS = 101
+NUM_IMAGES = 4339
 
 
 class GridPartition:
@@ -998,7 +1002,7 @@ def extract_latent_semantics_from_sim_matrix(
                 "semantic-feature": V_T.tolist(),
             }
 
-            # for each latent semantic, sort imageID-weight pairs by weights in descending order
+            # for each latent semantic, sort object-weight pairs by weights in descending order
             displayed_latent_semantics = [
                 sorted(
                     list(zip(feature_ids, latent_semantic)),
@@ -1033,7 +1037,7 @@ def extract_latent_semantics_from_sim_matrix(
                 "semantic-feature": H.tolist(),
             }
 
-            # for each latent semantic, sort imageID-weight pairs by weights in descending order
+            # for each latent semantic, sort object-weight pairs by weights in descending order
             displayed_latent_semantics = [
                 sorted(
                     list(zip(feature_ids, latent_semantic)),
@@ -1066,7 +1070,7 @@ def extract_latent_semantics_from_sim_matrix(
                 "semantic-feature": K.tolist(),
             }
 
-            # for each latent semantic, sort imageID-weight pairs by weights in descending order
+            # for each latent semantic, sort object-weight pairs by weights in descending order
             displayed_latent_semantics = [
                 sorted(
                     list(zip(feature_ids, latent_semantic)),
@@ -1084,10 +1088,10 @@ def extract_latent_semantics_from_sim_matrix(
 
             all_latent_semantics = {
                 "image-semantic": Y.tolist(),
-                "semantic-feature": list(CC.values()),
+                "semantic-feature": CC.tolist(),
             }
 
-            # for each latent semantic, sort imageID-weight pairs by weights in descending order
+            # for each latent semantic, sort object-weight pairs by weights in ascending order
             displayed_latent_semantics = [
                 sorted(
                     list(zip(feature_ids, latent_semantic)),
@@ -1096,9 +1100,8 @@ def extract_latent_semantics_from_sim_matrix(
                 )[:top_images]
                 for latent_semantic in Y.T
             ]
+            print("Note: for K-Means we display distances, in ascending order")
 
-    if valid_dim_reduction_methods[dim_reduction_method] == 4:
-        print("Note: for K-Means we display distances, in ascending order")
     for idx, latent_semantic in enumerate(displayed_latent_semantics):
         print(f"Latent semantic no. {idx}")
         for obj_id, weight in latent_semantic:
@@ -1129,19 +1132,17 @@ def find_label_label_similarity(fd_collection, feature_model):
     label_sim_matrix = []
     label_mean_vectors = []
 
-    num_labels = 101
-
-    for label in range(num_labels):
+    for label in range(NUM_LABELS):
         # get representative vectors for the label
         label_mean_vectors.append(
             calculate_label_representatives(fd_collection, label, feature_model)
         )
 
-    label_sim_matrix = np.zeros((num_labels, num_labels))
+    label_sim_matrix = np.zeros((NUM_LABELS, NUM_LABELS))
 
     # Calculate half and fill the other
-    for i in range(num_labels):
-        for j in range(i + 1, num_labels):
+    for i in range(NUM_LABELS):
+        for j in range(i + 1, NUM_LABELS):
             # Note: lower the value, lower the distance => higher the similarity
             label_sim_matrix[i][j] = label_sim_matrix[j][i] = feature_distance_matches[
                 feature_model
@@ -1163,14 +1164,30 @@ def find_image_image_similarity(fd_collection, feature_model):
         ).flatten()  # get the specific feature model's feature vector
         for img_fds in fd_collection.find()  # repeat for all images
     ]
-    num_images = len(feature_vectors)
-    image_sim_matrix = np.zeros((num_images, num_images))
+    image_sim_matrix = np.zeros((NUM_IMAGES, NUM_IMAGES))
 
     # Calculate half and fill the other
-    for i in range(num_images):
-        for j in range(i + 1, num_images):
+    for i in range(NUM_IMAGES):
+        for j in range(i + 1, NUM_IMAGES):
             # Note: lower the value, lower the distance => higher the similarity
             image_sim_matrix[i][j] = image_sim_matrix[j][i] = feature_distance_matches[
                 feature_model
             ](np.array(feature_vectors[i]), np.array(feature_vectors[j]))
     return image_sim_matrix
+
+def compute_cp_decomposition(fd_collection, feature_model, rank):
+    assert (
+        feature_model in valid_feature_models.values()
+    ), "feature_model should be one of " + str(list(valid_feature_models.keys()))
+
+    all_images = list(fd_collection.find())
+
+    # (images, features, labels)
+    data_tensor_shape = (NUM_IMAGES, len(all_images[0][feature_model]), NUM_LABELS)
+    data_tensor = np.zeros(data_tensor_shape)
+    for id in range(NUM_IMAGES):
+        label = all_images[id]["true_label"]
+        data_tensor[id, :, label] = all_images[id][feature_model]
+    
+    weights_tensor, factor_matrices = tl.decomposition.parafac(data_tensor, rank=rank, normalize_factors=True)
+    return weights_tensor, factor_matrices
