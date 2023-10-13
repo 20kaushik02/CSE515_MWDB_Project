@@ -642,7 +642,7 @@ def show_similar_labels_for_image(
             # Calculate target image's feature descriptors
             target_image = get_all_fd(target_image_id)
 
-        target_image_fd = target_image[feature_model]
+        target_image_fd = np.array(target_image[feature_model])
         target_label = target_image["true_label"]
 
     else:
@@ -718,94 +718,63 @@ valid_dim_reduction_methods = {
     "kmeans": 4,
 }
 
-
 class KMeans:
     def __init__(self, n_clusters, tol=0.001, max_iter=300, verbose=0):
         self.n_clusters = n_clusters
         self.max_iter = max_iter
         self.tol = tol
-        self.cluster_centers_ = {}
+        self.cluster_centers_ = None
         self.verbose = verbose
 
-    def fit(self, data):
-        """Iterative fitting clusters on data of `(n_samples,n_features)` dimensions"""
+    def _initialize_centroids(self, data):
+        random_indices = np.random.choice(data.shape[0], self.n_clusters, replace=False)
+        self.cluster_centers_ = data[random_indices]
 
-        # Randomly select centroid start points with uniform distribution from dataset
-        min_, max_ = np.min(data, axis=0), np.max(data, axis=0)
-        self.cluster_centers_ = {
-            i: np.random.uniform(min_, max_) for i in range(self.n_clusters)
-        }
+    def fit(self, data):
+        data = np.array(data)
+        self._initialize_centroids(data)
 
         if self.verbose > 0:
             print("Initialized centroids")
-        for itr in range(self.max_iter):
-            print(f"Iteration {itr}")
-            self.clusters = {}
 
-            for j in range(self.n_clusters):
-                self.clusters[j] = []
+        for itr in range(self.max_iter):
+            clusters = {j: [] for j in range(self.n_clusters)}
 
             for feature_set in data:
-                # TODO: Should this be modified to use different distance measures
-                # based on the feature set?
-                distances = [
-                    np.linalg.norm(feature_set - self.cluster_centers_[i])
-                    for i in range(len(self.cluster_centers_))
-                ]
-
-                # Put data point into closest cluster
+                distances = np.linalg.norm(feature_set - self.cluster_centers_, axis=1)
                 cluster = np.argmin(distances)
-                self.clusters[cluster].append(feature_set)
+                clusters[cluster].append(feature_set)
 
-            prev_centroids = self.cluster_centers_
+            prev_centroids = np.copy(self.cluster_centers_)
 
-            for c in self.cluster_centers_:
-                if isinstance(self.cluster_centers_[c], np.ndarray):
-                    if np.isnan(self.cluster_centers_[c]).any():
-                        # Reinitialize centroid to a random point in the dataset
-                        self.cluster_centers_[c] = np.random.uniform(min_, max_)
-                    else:
-                        # Compute the mean of non-empty cluster
-                        self.cluster_centers_[c] = np.mean(self.clusters[c], axis=0)
-                elif np.isnan(self.cluster_centers_[c]):
+            for c in range(self.n_clusters):
+                if len(clusters[c]) > 0:
+                    self.cluster_centers_[c] = np.mean(clusters[c], axis=0)
+                else:
                     # Reinitialize centroid to a random point in the dataset
-                    self.cluster_centers_[c] = np.random.uniform(min_, max_)
+                    random_index = np.random.choice(data.shape[0])
+                    self.cluster_centers_[c] = data[random_index]
 
             # Check if centroids have converged
-            optimized = True
-            for c in self.cluster_centers_:
-                prev_centroid = prev_centroids[c]
-                current_centroid = self.cluster_centers_[c]
-                convergence_tol = np.sum(
-                    abs((prev_centroid - current_centroid) / prev_centroid * 100.0)
-                )
-                if convergence_tol > self.tol:
-                    optimized = False
-                    if self.verbose > 0:
-                        print(f"Iter {itr} - Not converged yet")
-                    break
-
-            if itr > 10 and optimized:
+            convergence_tol = np.sum(
+                np.abs((prev_centroids - self.cluster_centers_) / prev_centroids)
+            )
+            if convergence_tol < self.tol:
                 if self.verbose > 0:
-                    print(f"Iter {itr} - Converged")
+                    print(f"Iteration {itr} - Converged")
                 break
 
         return self
 
     def transform(self, data):
-        """Transform data of `(n_samples,n_features)` dimensions to `(n_samples,n_clusters)` using fitted model"""
+        if self.cluster_centers_ is None:
+            raise ValueError("Fit the model first using the 'fit' method.")
 
-        Y = np.empty((len(data), self.n_clusters))
+        data = np.array(data)
+        Y = np.empty((data.shape[0], self.n_clusters))
 
         for idx, feature_set in enumerate(data):
-            # TODO: Could this be modified to use different distance measures
-            # based on the feature set?
-            Y[idx] = np.array(
-                [
-                    np.linalg.norm(feature_set - self.cluster_centers_[i])
-                    for i in range(len(self.cluster_centers_))
-                ]
-            )
+            Y[idx] = np.linalg.norm(feature_set - self.cluster_centers_, axis=1)
 
         return Y
 
@@ -999,7 +968,7 @@ def extract_latent_semantics_from_feature_model(
 
             all_latent_semantics = {
                 "image-semantic": Y.tolist(),
-                "semantic-feature": list(CC.values()),
+                "semantic-feature": CC.tolist(),
             }
 
             # for each latent semantic, sort imageID-weight pairs by weights in descending order
@@ -1012,10 +981,15 @@ def extract_latent_semantics_from_feature_model(
                 for latent_semantic in Y.T
             ]
 
+    if valid_dim_reduction_methods[dim_reduction_method] == 4:
+        print("Note: for K-Means we display distances, in ascending order")
     for idx, latent_semantic in enumerate(displayed_latent_semantics):
         print(f"Latent semantic no. {idx}")
         for image_id, weight in latent_semantic:
-            print(f"Image_ID\t{image_id}\t-\tWeight\t{weight}")
+            if valid_dim_reduction_methods[dim_reduction_method] == 4:
+                print(f"Image_ID\t{image_id}\t-\tDistance\t{weight}")
+            else:
+                print(f"Image_ID\t{image_id}\t-\tWeight\t{weight}")
 
     with open(
         f"{feature_model}-{dim_reduction_method}-{k}-semantics.json",
@@ -1177,10 +1151,15 @@ def extract_latent_semantics_from_sim_matrix(
                 for latent_semantic in Y.T
             ]
 
+    if valid_dim_reduction_methods[dim_reduction_method] == 4:
+        print("Note: for K-Means we display distances, in ascending order")
     for idx, latent_semantic in enumerate(displayed_latent_semantics):
         print(f"Latent semantic no. {idx}")
         for obj_id, weight in latent_semantic:
-            print(f"{sim_type}\t{obj_id}\t-\tWeight\t{weight}")
+            if valid_dim_reduction_methods[dim_reduction_method] == 4:
+                print(f"{sim_type}\t{obj_id}\t-\tDistance\t{weight}")
+            else:
+                print(f"{sim_type}\t{obj_id}\t-\tWeight\t{weight}")
 
     # Finally also save sim_matrix
     all_latent_semantics["sim-matrix"] = sim_matrix.tolist()
