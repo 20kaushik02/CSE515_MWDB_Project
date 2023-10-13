@@ -998,6 +998,7 @@ def extract_latent_semantics_from_feature_model(
     ) as output_file:
         json.dump(all_latent_semantics, output_file, ensure_ascii=False)
 
+
 def extract_latent_semantics_from_sim_matrix(
     sim_matrix,
     feature_model,
@@ -1080,7 +1081,8 @@ def extract_latent_semantics_from_sim_matrix(
             )
             model.fit(feature_vectors_shifted)
 
-            W, H = nmf(feature_vectors_shifted, k = k)
+            W = model.transform(feature_vectors_shifted)
+            H = model.components_
 
             all_latent_semantics = {
                 "image-semantic": W.tolist(),
@@ -1170,6 +1172,7 @@ def extract_latent_semantics_from_sim_matrix(
         encoding="utf-8",
     ) as output_file:
         json.dump(all_latent_semantics, output_file, ensure_ascii=False)
+
 
 def find_label_label_similarity(fd_collection, feature_model):
     """
