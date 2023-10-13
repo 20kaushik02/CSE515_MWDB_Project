@@ -841,6 +841,25 @@ def svd(matrix, k):
 
     return left_singular_vectors, np.diag(singular_values), right_singular_vectors.T
 
+def nmf(matrix, k, num_iterations=100):
+    d1, d2 = matrix.shape
+    # Initialize W and H matrices with random non-negative values
+    W = np.random.rand(d1, k)
+    H = np.random.rand(k, d2)
+
+    for iteration in range(num_iterations):
+        # Update H matrix
+        numerator_h = np.dot(W.T, matrix)
+        denominator_h = np.dot(np.dot(W.T, W), H)
+        H *= numerator_h / denominator_h
+
+        # Update W matrix
+        numerator_w = np.dot(matrix, H.T)
+        denominator_w = np.dot(W, np.dot(H, H.T))
+        W *= numerator_w / denominator_w
+
+    return W, H
+
 def extract_latent_semantics_from_feature_model(
     fd_collection,
     k,
@@ -1087,8 +1106,7 @@ def extract_latent_semantics_from_sim_matrix(
             )
             model.fit(feature_vectors_shifted)
 
-            W = model.transform(feature_vectors_shifted)
-            H = model.components_
+            W, H = nmf(feature_vectors_shifted, k = k)
 
             all_latent_semantics = {
                 "image-semantic": W.tolist(),
