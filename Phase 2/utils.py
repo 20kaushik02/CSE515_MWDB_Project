@@ -29,11 +29,14 @@ from pymongo import MongoClient
 
 # Visualizing
 import matplotlib.pyplot as plt
+import certifi
 
 
 def getCollection(db, collection):
+
+    ca = certifi.where()
     """Load feature descriptor collection from MongoDB"""
-    client = MongoClient("mongodb://localhost:27017")
+    client = MongoClient("mongodb+srv://pavan:pavan123@cluster0.buq5bqh.mongodb.net/", tlsCAFile = ca)
     return client[db][collection]
 
 
@@ -608,11 +611,11 @@ def extract_latent_semantics(
     top_img_str = ""
     if top_images is not None:
         top_img_str = f" (showing only top {top_images} image-weight pairs for each latent semantic)"
-    print(
+        print(
         "Applying {} on the {} space to get {} latent semantics{}...".format(
             dim_reduction_method, feature_model, k, top_img_str
-        )
-    )
+        ))
+        print(feature_vectors.shape)
 
     displayed_latent_semantics = {}
     all_latent_semantics = {}
