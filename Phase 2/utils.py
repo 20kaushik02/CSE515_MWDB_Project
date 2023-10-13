@@ -636,7 +636,7 @@ def show_similar_labels_for_image(
             # Calculate target image's feature descriptors
             target_image = get_all_fd(target_image_id)
 
-        target_image_fd = target_image[feature_model]
+        target_image_fd = np.array(target_image[feature_model])
         target_label = target_image["true_label"]
 
     else:
