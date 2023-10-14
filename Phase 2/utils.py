@@ -276,7 +276,7 @@ def resnet_extractor(image):
 
 
 def resnet_output(image):
-    """Get image features from ResNet50 (full execution)"""
+    """Get image features from ResNet50 (full execution) and apply a softmax layer"""
     resized_image = (
         torch.Tensor(np.array(transforms.Resize((224, 224))(image)).flatten())
         .view(1, 3, 224, 224)
@@ -285,7 +285,8 @@ def resnet_output(image):
 
     with torch.no_grad():
         features = model(resized_image)
-
+        features = torch.nn.Softmax()(features)
+        
     return features.detach().cpu().tolist()
 
 
