@@ -25,6 +25,7 @@ import json
 from os import getenv
 from dotenv import load_dotenv
 import warnings
+from joblib import dump, load
 
 load_dotenv()
 
@@ -722,6 +723,7 @@ valid_dim_reduction_methods = {
     "kmeans": 4,
 }
 
+
 class KMeans:
     def __init__(self, n_clusters, tol=0.001, max_iter=300, verbose=0):
         self.n_clusters = n_clusters
@@ -944,15 +946,17 @@ def extract_latent_semantics_from_feature_model(
             )
             model.fit(feature_vectors_shifted)
 
-            # K (k x fd_dim) is the factor matrix for latent semantic-feature pairs
+            # K (k x fd_dim) is the pseudocount for latent semantic-feature pairs
             K = model.components_
-            # X (4339 x k) is the other factor matrix for image ID-latent semantic pairs
+            # X (4339 x k) is the image-semantic distribution (image ID-latent semantic pairs)
             X = model.transform(feature_vectors_shifted)
 
             all_latent_semantics = {
                 "image-semantic": X.tolist(),
                 "semantic-feature": K.tolist(),
             }
+
+            dump(model, f"{feature_model}-{dim_reduction_method}-{k}-model.joblib")
 
             # for each latent semantic, sort imageID-weight pairs by weights in descending order
             displayed_latent_semantics = [
@@ -1116,15 +1120,20 @@ def extract_latent_semantics_from_sim_matrix(
             )
             model.fit(feature_vectors_shifted)
 
-            # K (k x fd_dim) is the factor matrix for latent semantic-feature pairs
+            # K (k x fd_dim) is the pseudocount for latent semantic-feature pairs
             K = model.components_
-            # X (4339 x k) is the other factor matrix for image ID-latent semantic pairs
+            # X (4339 x k) is the image-semantic distribution (image ID-latent semantic pairs)
             X = model.transform(feature_vectors_shifted)
 
             all_latent_semantics = {
                 "image-semantic": X.tolist(),
                 "semantic-feature": K.tolist(),
             }
+
+            dump(
+                model,
+                f"{sim_type}-{feature_model}-{dim_reduction_method}-{k}-model.joblib",
+            )
 
             # for each latent semantic, sort object-weight pairs by weights in descending order
             displayed_latent_semantics = [
@@ -1231,6 +1240,7 @@ def find_image_image_similarity(fd_collection, feature_model):
             ](np.array(feature_vectors[i]), np.array(feature_vectors[j]))
     return image_sim_matrix
 
+
 def compute_cp_decomposition(fd_collection, feature_model, rank):
     assert (
         feature_model in valid_feature_models.values()
@@ -1239,11 +1249,84 @@ def compute_cp_decomposition(fd_collection, feature_model, rank):
     all_images = list(fd_collection.find())
 
     # (images, features, labels)
-    data_tensor_shape = (NUM_IMAGES, len(all_images[0][feature_model]), NUM_LABELS)
+    data_tensor_shape = (
+        NUM_IMAGES,
+        np.array(all_images[0][feature_model]).flatten().shape[0],
+        NUM_LABELS,
+    )
     data_tensor = np.zeros(data_tensor_shape)
-    for id in range(NUM_IMAGES):
-        label = all_images[id]["true_label"]
-        data_tensor[id, :, label] = all_images[id][feature_model]
-    
-    weights_tensor, factor_matrices = tl.decomposition.parafac(data_tensor, rank=rank, normalize_factors=True)
+    print(data_tensor_shape)
+
+    # create data tensor
+    for img_id in range(NUM_IMAGES):
+        label = all_images[img_id]["true_label"]
+        data_tensor[img_id, :, label] = np.array(
+            all_images[img_id][feature_model]
+        ).flatten()
+
+    weights_tensor, factor_matrices = tl.decomposition.parafac(
+        data_tensor, rank=rank, normalize_factors=True
+    )
     return weights_tensor, factor_matrices
+
+
+def extract_CP_semantics_from_feature_model(
+    fd_collection,
+    rank,
+    feature_model,
+    top_images=None,
+):
+    assert (
+        feature_model in valid_feature_models.values()
+    ), "feature_model should be one of " + str(list(valid_feature_models.keys()))
+
+    top_img_str = ""
+    if top_images is not None:
+        top_img_str = f" (showing only top {top_images} image-weight pairs for each latent semantic)"
+    print(
+        "Applying CP decomposition on the {} space to get {} latent semantics{}...".format(
+            feature_model, rank, top_img_str
+        )
+    )
+
+    all_images = list(fd_collection.find())
+    img_ids = [img for img in range(NUM_IMAGES)]
+    img_feature_ids = [
+        feature_num for feature_num in range(len(all_images[0][feature_model]))
+    ]
+    img_label_ids = [label for label in range(NUM_LABELS)]
+    feature_ids = [img_ids, img_feature_ids, img_label_ids]
+
+    weights_tensor, factor_matrices = compute_cp_decomposition(
+        fd_collection, feature_model, rank
+    )
+
+    all_latent_semantics = {
+        "image-semantic": factor_matrices[0].tolist(),
+        "feature-semantic": factor_matrices[1].tolist(),
+        "label-semantic": factor_matrices[2].tolist(),
+        "semantics-core": weights_tensor.tolist(),
+    }
+
+    strs = ["image", "feature", "label"]
+    for i in range(3):
+        displayed_latent_semantics = [
+            sorted(
+                list(zip(feature_ids[i], latent_semantic)),
+                key=lambda x: x[1],
+                reverse=True,
+            )[:top_images]
+            for latent_semantic in factor_matrices[i].T
+        ]
+        print(f"Showing {strs[i]}-weight latent semantic")
+        for idx, latent_semantic in enumerate(displayed_latent_semantics):
+            print(f"Latent semantic no. {idx}")
+            for obj_id, weight in latent_semantic:
+                print(f"{strs[i]}\t{obj_id}\t-\tweight\t{weight}")
+
+    with open(
+        f"{feature_model}-cp-{rank}-semantics.json",
+        "w",
+        encoding="utf-8",
+    ) as output_file:
+        json.dump(all_latent_semantics, output_file, ensure_ascii=False)
