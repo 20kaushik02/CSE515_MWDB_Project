@@ -1260,7 +1260,7 @@ def extract_CP_semantics_from_feature_model(
                 key=lambda x: x[1],
                 reverse=True,
             )[:top_images]
-            for latent_semantic in factor_matrices[i]
+            for latent_semantic in factor_matrices[i].T
         ]
         print(f"Showing {strs[i]}-weight latent semantic")
         for idx, latent_semantic in enumerate(displayed_latent_semantics):
