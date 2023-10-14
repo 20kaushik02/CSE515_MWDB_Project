@@ -3,3 +3,4 @@ Other code/
 *.zip
 *.env
 __pycache__
+*.json
