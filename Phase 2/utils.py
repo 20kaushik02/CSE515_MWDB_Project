@@ -5,6 +5,7 @@ import random
 import cv2
 import numpy as np
 from scipy.stats import pearsonr
+
 # from scipy.sparse.linalg import svds
 # from sklearn.decomposition import NMF
 from sklearn.decomposition import LatentDirichletAllocation
@@ -355,11 +356,14 @@ def pearson_distance_measure(img_1_fd, img_2_fd):
     # such that lower distance implies more similarity
     return 0.5 * (1 - pearsonr(img_1_fd_reshaped, img_2_fd_reshaped).statistic)
 
+
 def kl_divergence_measure(p, q):
+    p_f = p.flatten()
+    q_f = q.flatten()
     # Avoid division by zero
     epsilon = 1e-10
 
-    return np.sum(p * np.log((p + epsilon) / (q + epsilon)))
+    return np.sum(p_f * np.log((p_f + epsilon) / (q_f + epsilon)))
 
 
 valid_feature_models = {
