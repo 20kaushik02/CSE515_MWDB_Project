@@ -21,6 +21,7 @@ import tensorly as tl
 
 # OS and env
 import json
+import os
 from os import getenv
 from dotenv import load_dotenv
 import warnings
@@ -353,6 +354,12 @@ def pearson_distance_measure(img_1_fd, img_2_fd):
     # Invert and scale in half to fit the actual range [-1, 1] into the new range [0, 1]
     # such that lower distance implies more similarity
     return 0.5 * (1 - pearsonr(img_1_fd_reshaped, img_2_fd_reshaped).statistic)
+
+def kl_divergence_measure(p, q):
+    # Avoid division by zero
+    epsilon = 1e-10
+
+    return np.sum(p * np.log((p + epsilon) / (q + epsilon)))
 
 
 valid_feature_models = {
