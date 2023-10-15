@@ -1132,7 +1132,7 @@ def extract_latent_semantics_from_sim_matrix(
 
             dump(
                 model,
-                f"{sim_type}-{feature_model}-{dim_reduction_method}-{k}-model.joblib",
+                f"{sim_type}_sim-{feature_model}-{dim_reduction_method}-{k}-model.joblib",
             )
 
             # for each latent semantic, sort object-weight pairs by weights in descending order
