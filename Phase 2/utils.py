@@ -948,6 +948,8 @@ def extract_latent_semantics_from_feature_model(
             # so shift the input by subtracting the smallest value
             min_value = np.min(feature_vectors)
             feature_vectors_shifted = feature_vectors - min_value
+            # round off to reduce dictionary size
+            feature_vectors_shifted = np.round(feature_vectors_shifted, 3)
 
             model = LatentDirichletAllocation(
                 n_components=k, learning_method="online", verbose=4
@@ -1110,6 +1112,8 @@ def extract_latent_semantics_from_sim_matrix(
             # so shift the input by subtracting the smallest value
             min_value = np.min(feature_vectors)
             feature_vectors_shifted = feature_vectors - min_value
+            # round off to reduce dictionary size
+            feature_vectors_shifted = np.round(feature_vectors_shifted, 3)
 
             model = LatentDirichletAllocation(
                 n_components=k, learning_method="online", verbose=4
