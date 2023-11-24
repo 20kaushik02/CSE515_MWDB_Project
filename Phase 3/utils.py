@@ -40,7 +40,7 @@ import matplotlib.pyplot as plt
 
 valid_classification_methods = {
     "m-nn": 1,
-    "decision tree": 2,
+    "decision-tree": 2,
     "ppr": 3,
 }
 
