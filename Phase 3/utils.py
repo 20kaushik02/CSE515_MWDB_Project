@@ -40,7 +40,8 @@ from pymongo import MongoClient
 # Visualizing
 import matplotlib.pyplot as plt
 
-
+NUM_LABELS = 101
+NUM_IMAGES = 4338
 
 valid_classification_methods = {
     "m-nn": 1,
@@ -222,3 +223,96 @@ class LSHIndex:
                 unique_similar_vectors.append(tuple(candidate))
 
         return list(unique_similar_vectors), len(unique_vectors), len(candidates)
+
+def extract_latent_semantics_from_feature_model(
+    fd_collection,
+    k,
+    feature_model,
+):
+    """
+    Extract latent semantics for entire collection at once for a given feature_model and dim_reduction_method, and display the imageID-semantic weight pairs
+
+    Leave `top_images` blank to display all imageID-weight pairs
+    """
+
+
+    label_features = np.array([
+        np.array(
+            calculate_label_representatives(fd_collection, label, feature_model)
+        ).flatten()  # get the specific feature model's feature vector
+        for label in range(NUM_LABELS)
+          # repeat for all images
+    ])
+
+    print(
+        "Applying {} on the {} space to get {} latent semantics.".format(
+            "svd", feature_model, k
+        )
+    )
+
+    all_latent_semantics = {}
+
+    
+    U, S, V_T = svd(label_features, k=k)
+
+    U = [C.real for C in U]
+    S = [C.real for C in S]
+    V_T = [C.real for C in V_T]
+
+    all_latent_semantics = {
+        "image-semantic": U,
+        "semantics-core": S,
+        "semantic-feature": V_T,
+    }
+
+    # for each latent semantic, sort imageID-weight pairs by weights in descending order
+    return all_latent_semantics
+
+    
+def calculate_label_representatives(fd_collection, label, feature_model):
+    """Calculate representative feature vector of a label as the mean of all feature vectors under a feature model"""
+
+    label_fds = [
+        np.array(
+            img_fds[feature_model]
+        ).flatten()  # get the specific feature model's feature vector
+        for img_fds in fd_collection.find(
+            {"true_label": label, "$mod": [2,0]}
+        )  # repeat for all images
+    ]
+
+    # Calculate mean across each dimension
+    # and build a mean vector out of these means
+    label_mean_vector = [sum(col) / len(col) for col in zip(*label_fds)]
+    return label_mean_vector
+
+def svd(matrix, k):
+    # Step 1: Compute the covariance matrix
+    cov_matrix = np.dot(matrix.T, matrix)
+
+    # Step 2: Compute the eigenvalues and eigenvectors of the covariance matrix
+    eigenvalues, eigenvectors = np.linalg.eig(cov_matrix)
+
+    # Step 3: Sort the eigenvalues and corresponding eigenvectors
+    sort_indices = eigenvalues.argsort()[::-1]
+    eigenvalues = eigenvalues[sort_indices]
+    eigenvectors = eigenvectors[:, sort_indices]
+
+    # Step 4: Compute the singular values and the left and right singular vectors
+    singular_values = np.sqrt(eigenvalues)
+    left_singular_vectors = np.dot(matrix, eigenvectors)
+    right_singular_vectors = eigenvectors
+
+    # Step 5: Normalize the singular vectors
+    for i in range(left_singular_vectors.shape[1]):
+        left_singular_vectors[:, i] /= singular_values[i]
+
+    for i in range(right_singular_vectors.shape[1]):
+        right_singular_vectors[:, i] /= singular_values[i]
+
+    # Keep only the top k singular values and their corresponding vectors
+    singular_values = singular_values[:k]
+    left_singular_vectors = left_singular_vectors[:, :k]
+    right_singular_vectors = right_singular_vectors[:, :k]
+
+    return left_singular_vectors, np.diag(singular_values), right_singular_vectors.T
