@@ -175,7 +175,7 @@ class LSH:
         self.num_hashes = num_hashes
         self.hash_tables = [defaultdict(list) for _ in range(num_layers)]
         self.unique_images_considered = set()
-        self.overall_images_considered = set()
+        self.overall_images_considered = []
         self.create_hash_tables()
 
     def hash_vector(self, vector, seed):
@@ -192,7 +192,7 @@ class LSH:
     def find_similar(self, external_image, t):
         similar_images = set()
         visited_buckets = set()
-        unique_images_considered = set()
+        unique_images_considered = []
 
         for layer in range(self.num_layers):
             hash_code = self.hash_vector(external_image, seed=layer)
@@ -202,7 +202,7 @@ class LSH:
             if hash_code in self.hash_tables[layer]:
                 for idx in self.hash_tables[layer][hash_code]:
                     similar_images.add(idx)
-                    unique_images_considered.add(idx)
+                    unique_images_considered.append(idx)
 
             # Searching in nearby buckets based on Hamming distance
             for key in self.hash_tables[layer]:
@@ -211,10 +211,10 @@ class LSH:
 
                     for idx in self.hash_tables[layer][key]:
                         similar_images.add(idx)
-                        unique_images_considered.add(idx)
+                        unique_images_considered.append(idx)
 
-        self.unique_images_considered = unique_images_considered
-        self.overall_images_considered = similar_images
+        self.overall_images_considered = unique_images_considered
+        self.unique_images_considered = set(unique_images_considered)
 
         similarities = [
             (idx, self.euclidean_distance(external_image, self.data[idx])) for idx in similar_images
