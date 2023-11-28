@@ -8,8 +8,6 @@ from scipy.stats import pearsonr
 
 from collections import defaultdict
 
-# from scipy.sparse.linalg import svds
-# from sklearn.decomposition import NMF
 from sklearn.decomposition import LatentDirichletAllocation
 
 # from sklearn.cluster import KMeans
@@ -43,6 +41,22 @@ import matplotlib.pyplot as plt
 NUM_LABELS = 101
 NUM_IMAGES = 4338
 
+def datasetTransform(image):
+    """Transform while loading dataset as scaled tensors of shape (channels, (img_shape))"""
+    return transforms.Compose(
+        [
+            transforms.ToTensor()  # ToTensor by default scales to [0,1] range, the input range for ResNet
+        ]
+    )(image)
+
+def loadDataset(dataset):
+    """Load TorchVision dataset with the defined transform"""
+    return dataset(
+        root=getenv("DATASET_PATH"),
+        download=False,  # True if you wish to download for first time
+        transform=datasetTransform,
+    )
+
 valid_classification_methods = {
     "m-nn": 1,
     "decision-tree": 2,
@@ -72,157 +86,135 @@ valid_feature_models = {
     "resnet": "resnet_fd",
 }
 
-class Node:
-    def __init__(self, feature=None, threshold=None, left=None, right=None, value=None):
-        self.feature = feature
-        self.threshold = threshold
-        self.left = left
-        self.right = right
-        self.value = value
+
 
 class DecisionTree:
     def __init__(self, max_depth=None):
         self.max_depth = max_depth
-        self.tree = None
-    
-    def entropy(self, y):
-        _, counts = np.unique(y, return_counts=True)
-        probabilities = counts / len(y)
-        return -np.sum(probabilities * np.log2(probabilities))
-    
-    def information_gain(self, X, y, feature, threshold):
-        left_idxs = X[:, feature] <= threshold
-        right_idxs = ~left_idxs
-        
-        left_y = y[left_idxs]
-        right_y = y[right_idxs]
-        
-        p_left = len(left_y) / len(y)
-        p_right = len(right_y) / len(y)
-        
-        gain = self.entropy(y) - (p_left * self.entropy(left_y) + p_right * self.entropy(right_y))
-        return gain
-    
-    def find_best_split(self, X, y):
-        best_gain = 0
-        best_feature = None
-        best_threshold = None
-        
-        for feature in range(X.shape[1]):
-            thresholds = np.unique(X[:, feature])
-            for threshold in thresholds:
-                gain = self.information_gain(X, y, feature, threshold)
-                if gain > best_gain:
-                    best_gain = gain
-                    best_feature = feature
-                    best_threshold = threshold
-        
-        return best_feature, best_threshold
-    
-    def build_tree(self, X, y, depth=0):
-        if len(np.unique(y)) == 1 or depth == self.max_depth:
-            return Node(value=np.argmax(np.bincount(y)))
-        
-        best_feature, best_threshold = self.find_best_split(X, y)
-        
-        if best_feature is None:
-            return Node(value=np.argmax(np.bincount(y)))
-        
-        left_idxs = X[:, best_feature] <= best_threshold
-        right_idxs = ~left_idxs
-        
-        left_subtree = self.build_tree(X[left_idxs], y[left_idxs], depth + 1)
-        right_subtree = self.build_tree(X[right_idxs], y[right_idxs], depth + 1)
-        
-        return Node(feature=best_feature, threshold=best_threshold, left=left_subtree, right=right_subtree)
-    
-    def fit(self, X, y):
-        X = np.array(X)  # Convert to NumPy array
-        y = np.array(y)  # Convert to NumPy array
-        self.tree = self.build_tree(X, y)
-    
-    def predict_instance(self, x, node):
-        if node.value is not None:
-            return node.value
-        
-        if x[node.feature] <= node.threshold:
-            return self.predict_instance(x, node.left)
-        else:
-            return self.predict_instance(x, node.right)
-    
-    def predict(self, X):
-        X = np.array(X)  # Convert to NumPy array
-        predictions = []
-        for x in X:
-            pred = self.predict_instance(x, self.tree)
-            predictions.append(pred)
-        return np.array(predictions)
+        self.tree = {}
 
-class LSHIndex:
-    def __init__(self, num_layers, num_hashes, dimensions, seed=42):
+    def calculate_gini(self, labels):
+        classes, counts = np.unique(labels, return_counts=True)
+        probabilities = counts / len(labels)
+        gini = 1 - sum(probabilities ** 2)
+        return gini
+
+    def find_best_split(self, data, labels):
+        best_gini = float('inf')
+        best_index = None
+        best_value = None
+
+        for index in range(len(data[0])):
+            unique_values = np.unique(data[:, index])
+            for value in unique_values:
+                left_indices = np.where(data[:, index] <= value)[0]
+                right_indices = np.where(data[:, index] > value)[0]
+
+                left_gini = self.calculate_gini(labels[left_indices])
+                right_gini = self.calculate_gini(labels[right_indices])
+
+                gini = (len(left_indices) * left_gini + len(right_indices) * right_gini) / len(data)
+
+                if gini < best_gini:
+                    best_gini = gini
+                    best_index = index
+                    best_value = value
+
+        return best_index, best_value
+
+    def build_tree(self, data, labels, depth=0):
+        if len(np.unique(labels)) == 1 or (self.max_depth and depth >= self.max_depth):
+            return {'class': np.argmax(np.bincount(labels))}
+
+        best_index, best_value = self.find_best_split(data, labels)
+        left_indices = np.where(data[:, best_index] <= best_value)[0]
+        right_indices = np.where(data[:, best_index] > best_value)[0]
+
+        left_subtree = self.build_tree(data[left_indices], labels[left_indices], depth + 1)
+        right_subtree = self.build_tree(data[right_indices], labels[right_indices], depth + 1)
+
+        return {'index': best_index, 'value': best_value,
+                'left': left_subtree, 'right': right_subtree}
+
+    def fit(self, data, labels):
+        self.tree = self.build_tree(data, labels)
+
+    def predict_sample(self, sample, tree):
+        if 'class' in tree:
+            return tree['class']
+        
+        if sample[tree['index']] <= tree['value']:
+            return self.predict_sample(sample, tree['left'])
+        else:
+            return self.predict_sample(sample, tree['right'])
+
+    def predict(self, data):
+        predictions = []
+        for sample in data:
+            prediction = self.predict_sample(sample, self.tree)
+            predictions.append(prediction)
+        return predictions
+
+
+class LSH:
+    def __init__(self, data, num_layers, num_hashes):
+        self.data = data
         self.num_layers = num_layers
         self.num_hashes = num_hashes
-        self.dimensions = dimensions
-        self.index = [defaultdict(list) for _ in range(num_layers)]
-        self.hash_functions = self._generate_hash_functions(seed)
+        self.hash_tables = [defaultdict(list) for _ in range(num_layers)]
+        self.unique_images_considered = set()
+        self.overall_images_considered = set()
+        self.create_hash_tables()
 
-    def _generate_hash_functions(self, seed):
+    def hash_vector(self, vector, seed):
         np.random.seed(seed)
-        hash_functions = []
-        for _ in range(self.num_layers):
-            layer_hashes = []
-            for _ in range(self.num_hashes):
-                random_projection = np.random.randn(self.dimensions)
-                random_projection /= np.linalg.norm(random_projection)
-                layer_hashes.append(random_projection)
-            hash_functions.append(layer_hashes)
-        return hash_functions
+        random_vectors = np.random.randn(self.num_hashes, len(vector))
+        return ''.join(['1' if np.dot(random_vectors[i], vector) >= 0 else '0' for i in range(self.num_hashes)])
 
-    def hash_vector(self, vector):
-        hashed_values = []
-        for i in range(self.num_layers):
-            layer_hashes = self.hash_functions[i]
-            layer_hash = [int(np.dot(vector, h) > 0) for h in layer_hashes]
-            hashed_values.append(tuple(layer_hash))
-        return hashed_values
+    def create_hash_tables(self):
+        for layer in range(self.num_layers):
+            for i, vector in enumerate(self.data):
+                hash_code = self.hash_vector(vector, seed=layer)
+                self.hash_tables[layer][hash_code].append(i)
 
-    def add_vector(self, vector, image_id):
-        hashed = self.hash_vector(vector)
-        for i in range(self.num_layers):
-            self.index[i][hashed[i]].append((image_id, vector))
+    def find_similar(self, external_image, t, threshold=0.9):
+        similar_images = set()
+        visited_buckets = set()
+        unique_images_considered = set()
 
-    def query(self, query_vector):
-        hashed_query = self.hash_vector(query_vector)
-        candidates = set()
-        for i in range(self.num_layers):
-            candidates.update(self.index[i][hashed_query[i]])
-        return candidates
+        for layer in range(self.num_layers):
+            hash_code = self.hash_vector(external_image, seed=layer)
+            visited_buckets.add(hash_code)
 
-    def query_t_unique(self, query_vector, t):
-        hashed_query = self.hash_vector(query_vector)
-        candidates = []
-        unique_vectors = set()  # Track unique vectors considered
+            for key in self.hash_tables[layer]:
+                if key != hash_code and self.hamming_distance(key, hash_code) <= 2:
+                    visited_buckets.add(key)
 
-        for i in range(self.num_layers):
-            candidates.extend(self.index[i][hashed_query[i]])
+                    for idx in self.hash_tables[layer][key]:
+                        similar_images.add(idx)
+                        unique_images_considered.add(idx)
 
-        # Calculate Euclidean distance between query and candidate vectors
-        distances = []
-        for candidate in candidates:
-            unique_vectors.add(tuple(candidate[1]))  # Adding vectors to track uniqueness
-            # unique_vectors.add((candidate))  # Adding vectors to track uniqueness
-            distance = np.linalg.norm(candidate[0] - query_vector)
-            distances.append(distance)
+        self.unique_images_considered = unique_images_considered
+        self.overall_images_considered = similar_images
 
-        # Sort candidates based on Euclidean distance and get t unique similar vectors
-        unique_similar_vectors = []
-        for distance, candidate in sorted(zip(distances, candidates)):
-            if len(unique_similar_vectors) >= t:
-                break
-            if tuple(candidate) not in unique_similar_vectors:
-                unique_similar_vectors.append(tuple(candidate))
+        similarities = [
+            (idx, self.euclidean_distance(external_image, self.data[idx])) for idx in similar_images
+        ]
+        similarities.sort(key=lambda x: x[1])
 
-        return list(unique_similar_vectors), len(unique_vectors), len(candidates)
+        return [idx for idx, _ in similarities[:t]]
+
+    def hamming_distance(self, code1, code2):
+        return sum(c1 != c2 for c1, c2 in zip(code1, code2))
+
+    def euclidean_distance(self, vector1, vector2):
+        return np.linalg.norm(vector1 - vector2)
+
+    def get_unique_images_considered_count(self):
+        return len(self.unique_images_considered)
+
+    def get_overall_images_considered_count(self):
+        return len(self.overall_images_considered)
 
 def extract_latent_semantics_from_feature_model(
     fd_collection,
