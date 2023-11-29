@@ -288,7 +288,7 @@ def calculate_label_representatives(fd_collection, label, feature_model):
             img_fds[feature_model]
         ).flatten()  # get the specific feature model's feature vector
         for img_fds in fd_collection.find(
-            {"true_label": label, "$mod": [2,0]}
+            {"true_label": label, "image_id": {"$mod": [2,0]}}
         )  # repeat for all images
     ]
 
