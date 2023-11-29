@@ -327,3 +327,38 @@ def svd(matrix, k):
     right_singular_vectors = right_singular_vectors[:, :k]
 
     return left_singular_vectors, np.diag(singular_values), right_singular_vectors.T
+
+
+def calculate_metrics(actual_classes, predicted_classes, n_classes):
+    """Calculate per-class precision, recall and F1-score values, as well as overall accuracy value"""
+    # Convert actual_classes and predicted_classes to NumPy arrays for vectorized operations
+    actual_classes = np.array(actual_classes)
+    predicted_classes = np.array(predicted_classes)
+
+    # Initialize arrays for true positives, false positives, false negatives, true negatives
+    tp = np.zeros(n_classes)
+    fp = np.zeros(n_classes)
+    fn = np.zeros(n_classes)
+    tn = np.zeros(n_classes)
+
+    # Calculate true positives, false positives, false negatives, true negatives for each label
+    for label in range(n_classes):
+        tp[label] = np.sum((actual_classes == label) & (predicted_classes == label))
+        fp[label] = np.sum((actual_classes != label) & (predicted_classes == label))
+        fn[label] = np.sum((actual_classes == label) & (predicted_classes != label))
+        tn[label] = np.sum((actual_classes != label) & (predicted_classes != label))
+
+    # Calculate precision, recall, F1-score for each label
+    precision = np.divide(tp, tp + fp, out=np.zeros_like(tp), where=(tp + fp) != 0)
+    recall = np.divide(tp, tp + fn, out=np.zeros_like(tp), where=(tp + fn) != 0)
+    f1_score = np.divide(
+        2 * precision * recall,
+        precision + recall,
+        out=np.zeros_like(tp),
+        where=(precision + recall) != 0,
+    )
+
+    # Calculate overall accuracy
+    overall_accuracy = np.average(actual_classes == predicted_classes)
+
+    return precision, recall, f1_score, overall_accuracy
