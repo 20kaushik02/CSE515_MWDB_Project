@@ -68,7 +68,6 @@ def getCollection(db, collection):
     client = MongoClient("mongodb://localhost:27017")
     return client[db][collection]
 
-
 def euclidean_distance_measure(img_1_fd, img_2_fd):
     img_1_fd_reshaped = img_1_fd.flatten()
     img_2_fd_reshaped = img_2_fd.flatten()
@@ -86,75 +85,88 @@ valid_feature_models = {
     "resnet": "resnet_fd",
 }
 
-
+class Node:
+    def __init__(self, feature=None, threshold=None, left=None, right=None, value=None):
+        self.feature = feature          # Index of feature to split on
+        self.threshold = threshold      # Threshold value for the feature
+        self.left = left                # Left child node
+        self.right = right              # Right child node
+        self.value = value              # Class label for leaf node (if applicable)
 
 class DecisionTree:
     def __init__(self, max_depth=None):
-        self.max_depth = max_depth
-        self.tree = {}
-
-    def calculate_gini(self, labels):
-        classes, counts = np.unique(labels, return_counts=True)
-        probabilities = counts / len(labels)
-        gini = 1 - sum(probabilities ** 2)
-        return gini
-
-    def find_best_split(self, data, labels):
-        best_gini = float('inf')
-        best_index = None
-        best_value = None
-
-        for index in range(len(data[0])):
-            unique_values = np.unique(data[:, index])
-            for value in unique_values:
-                left_indices = np.where(data[:, index] <= value)[0]
-                right_indices = np.where(data[:, index] > value)[0]
-
-                left_gini = self.calculate_gini(labels[left_indices])
-                right_gini = self.calculate_gini(labels[right_indices])
-
-                gini = (len(left_indices) * left_gini + len(right_indices) * right_gini) / len(data)
-
-                if gini < best_gini:
-                    best_gini = gini
-                    best_index = index
-                    best_value = value
-
-        return best_index, best_value
-
-    def build_tree(self, data, labels, depth=0):
-        if len(np.unique(labels)) == 1 or (self.max_depth and depth >= self.max_depth):
-            return {'class': np.argmax(np.bincount(labels))}
-
-        best_index, best_value = self.find_best_split(data, labels)
-        left_indices = np.where(data[:, best_index] <= best_value)[0]
-        right_indices = np.where(data[:, best_index] > best_value)[0]
-
-        left_subtree = self.build_tree(data[left_indices], labels[left_indices], depth + 1)
-        right_subtree = self.build_tree(data[right_indices], labels[right_indices], depth + 1)
-
-        return {'index': best_index, 'value': best_value,
-                'left': left_subtree, 'right': right_subtree}
-
-    def fit(self, data, labels):
-        self.tree = self.build_tree(data, labels)
-
-    def predict_sample(self, sample, tree):
-        if 'class' in tree:
-            return tree['class']
+        self.max_depth = max_depth      # Maximum depth of the tree
+        self.tree = None                # Root node of the tree
+    
+    def entropy(self, y):
+        _, counts = np.unique(y, return_counts=True)
+        probabilities = counts / len(y)
+        return -np.sum(probabilities * np.log2(probabilities))
+    
+    def information_gain(self, X, y, feature, threshold):
+        left_idxs = X[:, feature] <= threshold
+        right_idxs = ~left_idxs
         
-        if sample[tree['index']] <= tree['value']:
-            return self.predict_sample(sample, tree['left'])
+        left_y = y[left_idxs]
+        right_y = y[right_idxs]
+        
+        p_left = len(left_y) / len(y)
+        p_right = len(right_y) / len(y)
+        
+        gain = self.entropy(y) - (p_left * self.entropy(left_y) + p_right * self.entropy(right_y))
+        return gain
+    
+    def find_best_split(self, X, y):
+        best_gain = 0
+        best_feature = None
+        best_threshold = None
+        
+        for feature in range(X.shape[1]):
+            thresholds = np.unique(X[:, feature])
+            for threshold in thresholds:
+                gain = self.information_gain(X, y, feature, threshold)
+                if gain > best_gain:
+                    best_gain = gain
+                    best_feature = feature
+                    best_threshold = threshold
+        
+        return best_feature, best_threshold
+    
+    def build_tree(self, X, y, depth=0):
+        if len(np.unique(y)) == 1 or depth == self.max_depth:
+            return Node(value=np.argmax(np.bincount(y)))
+        
+        best_feature, best_threshold = self.find_best_split(X, y)
+        
+        if best_feature is None:
+            return Node(value=np.argmax(np.bincount(y)))
+        
+        left_idxs = X[:, best_feature] <= best_threshold
+        right_idxs = ~left_idxs
+        
+        left_subtree = self.build_tree(X[left_idxs], y[left_idxs], depth + 1)
+        right_subtree = self.build_tree(X[right_idxs], y[right_idxs], depth + 1)
+        
+        return Node(feature=best_feature, threshold=best_threshold, left=left_subtree, right=right_subtree)
+    
+    def fit(self, X, y):
+        self.tree = self.build_tree(X, y)
+    
+    def predict_instance(self, x, node):
+        if node.value is not None:
+            return node.value
+        
+        if x[node.feature] <= node.threshold:
+            return self.predict_instance(x, node.left)
         else:
-            return self.predict_sample(sample, tree['right'])
-
-    def predict(self, data):
+            return self.predict_instance(x, node.right)
+    
+    def predict(self, X):
         predictions = []
-        for sample in data:
-            prediction = self.predict_sample(sample, self.tree)
-            predictions.append(prediction)
-        return predictions
-
+        for x in X:
+            pred = self.predict_instance(x, self.tree)
+            predictions.append(pred)
+        return np.array(predictions)
 
 class LSH:
     def __init__(self, data, num_layers, num_hashes):
@@ -163,7 +175,7 @@ class LSH:
         self.num_hashes = num_hashes
         self.hash_tables = [defaultdict(list) for _ in range(num_layers)]
         self.unique_images_considered = set()
-        self.overall_images_considered = set()
+        self.overall_images_considered = []
         self.create_hash_tables()
 
     def hash_vector(self, vector, seed):
@@ -177,25 +189,32 @@ class LSH:
                 hash_code = self.hash_vector(vector, seed=layer)
                 self.hash_tables[layer][hash_code].append(i)
 
-    def find_similar(self, external_image, t, threshold=0.9):
+    def find_similar(self, external_image, t):
         similar_images = set()
         visited_buckets = set()
-        unique_images_considered = set()
+        unique_images_considered = []
 
         for layer in range(self.num_layers):
             hash_code = self.hash_vector(external_image, seed=layer)
             visited_buckets.add(hash_code)
 
+            # Handling exact matches explicitly
+            if hash_code in self.hash_tables[layer]:
+                for idx in self.hash_tables[layer][hash_code]:
+                    similar_images.add(idx)
+                    unique_images_considered.append(idx)
+
+            # Searching in nearby buckets based on Hamming distance
             for key in self.hash_tables[layer]:
-                if key != hash_code and self.hamming_distance(key, hash_code) <= 2:
+                if self.hamming_distance(key, hash_code) <= 1:
                     visited_buckets.add(key)
 
                     for idx in self.hash_tables[layer][key]:
                         similar_images.add(idx)
-                        unique_images_considered.add(idx)
+                        unique_images_considered.append(idx)
 
-        self.unique_images_considered = unique_images_considered
-        self.overall_images_considered = similar_images
+        self.overall_images_considered = unique_images_considered
+        self.unique_images_considered = set(unique_images_considered)
 
         similarities = [
             (idx, self.euclidean_distance(external_image, self.data[idx])) for idx in similar_images
